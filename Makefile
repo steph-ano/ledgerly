@@ -1,6 +1,6 @@
-.PHONY: test test-ledger test-bnpl test-web build build-ledger build-bnpl build-web docker-up docker-down
+.PHONY: test test-ledger test-bnpl test-web test-mobile build build-ledger build-bnpl build-web docker-up docker-down
 
-test: test-ledger test-bnpl test-web
+test: test-ledger test-bnpl test-web test-mobile
 
 test-ledger:
 	@echo "==> Running Ledger tests (unit, property, integration)..."
@@ -13,6 +13,10 @@ test-bnpl:
 test-web:
 	@echo "==> Validating Web frontend build and types..."
 	cd web && npm run build
+
+test-mobile:
+	@echo "==> Validating Mobile frontend types..."
+	cd mobile && npm run typecheck
 
 build: build-ledger build-bnpl build-web
 
