@@ -1,6 +1,7 @@
 # Binaries
 bin/
 dist/
+node_modules/
 *.exe
 *.exe~
 *.dll

@@ -64,5 +64,17 @@ services:
       timeout: 3s
       retries: 3
 
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: ledgerly-web-portal
+    restart: unless-stopped
+    depends_on:
+      - ledger
+      - bnpl
+    ports:
+      - "3000:80"
+
 volumes:
   postgres_data:
