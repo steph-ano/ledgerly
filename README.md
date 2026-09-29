@@ -14,7 +14,7 @@ The platform splits purchases into installments, records every monetary movement
 
 ```mermaid
 graph TD
-    Client["Merchant Web / Mobile App"] -->|HTTP / JSON<br/>Orders & Payments| BNPL_API["BNPL Service API (:8081)"]
+    Client["Merchant Web / Mobile App"] -->|"HTTP / JSON Requests"| BNPL_API["BNPL Service API (:8081)"]
     
     subgraph BNPL_Service ["BNPL Core Service"]
         BNPL_API --> OrderSvc["Order & Installment Service"]
@@ -23,14 +23,14 @@ graph TD
         OrderSvc --> LedgerClient["Ledger HTTP Client"]
         
         Scheduler["Background Scheduler Worker<br/>(SELECT ... FOR UPDATE SKIP LOCKED)"]
-        Scheduler -->|Exponential Backoff (+2h, +12h, +24h)| GwSim
-        Scheduler -->|Post Installment Settlement| LedgerClient
+        Scheduler -->|"Exponential Backoff (+2h, +12h, +24h)"| GwSim
+        Scheduler -->|"Post Installment Settlement"| LedgerClient
         
         OutboxDispatcher["Transactional Outbox Dispatcher<br/>(HMAC-SHA256 Signature)"]
-        OutboxDispatcher -->|Signed Webhooks| MerchantWebhook["Merchant Webhook URL"]
+        OutboxDispatcher -->|"Signed Webhooks"| MerchantWebhook["Merchant Webhook URL"]
     end
     
-    LedgerClient -->|Double-Entry Transactions| Ledger_API["Ledger Core Service (:8080)"]
+    LedgerClient -->|"Double-Entry Transactions"| Ledger_API["Ledger Core Service (:8080)"]
     
     subgraph Ledger_Service ["Core Ledger Service"]
         Ledger_API --> LedgerSvc["Ledger Application Service"]
@@ -39,8 +39,8 @@ graph TD
     end
     
     subgraph PostgreSQL ["PostgreSQL Database (READ COMMITTED)"]
-        Storage --> PgLedger["Ledger Schema<br/>- transactions & entries<br/>- Append-Only Triggers<br/>- Deferred Balance Verification"]
-        OrderSvc --> PgBNPL["BNPL Schema<br/>- orders & installments<br/>- payment_attempts<br/>- outbox_events"]
+        Storage --> PgLedger["Ledger Schema<br/>transactions, entries, append-only triggers"]
+        OrderSvc --> PgBNPL["BNPL Schema<br/>orders, installments, outbox_events"]
         Scheduler --> PgBNPL
         OutboxDispatcher --> PgBNPL
     end
@@ -84,10 +84,10 @@ All entries within a single transaction must share the same ISO 4217 currency co
 ### 6. Installment Scheduler with Worker Leasing & Exponential Backoff
 * Background workers lease due installments using `SELECT ... FOR UPDATE SKIP LOCKED`, preventing multiple worker instances from double-charging the same installment.
 * Automated retry policy for declined attempts follows an exponential backoff schedule:
-  - Attempt 1 fails $\to$ Retry in **+2 hours** (status: `retrying`)
-  - Attempt 2 fails $\to$ Retry in **+12 hours** (status: `retrying`)
-  - Attempt 3 fails $\to$ Retry in **+24 hours** (status: `retrying`)
-  - Attempt 4 fails $\to$ Terminal default: installment marked `failed`, order transitioned to `defaulted`.
+  - Attempt 1 fails &rarr; Retry in **+2 hours** (status: `retrying`)
+  - Attempt 2 fails &rarr; Retry in **+12 hours** (status: `retrying`)
+  - Attempt 3 fails &rarr; Retry in **+24 hours** (status: `retrying`)
+  - Attempt 4 fails &rarr; Terminal default: installment marked `failed`, order transitioned to `defaulted`.
 
 ### 7. Transactional Outbox for Signed Webhooks
 * All domain events (`order.created`, `order.completed`, `installment.paid`, `order.defaulted`) are written to an `outbox_events` table inside the same ACID database transaction that updates business state.
