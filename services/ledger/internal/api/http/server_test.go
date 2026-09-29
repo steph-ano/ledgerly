@@ -24,6 +24,7 @@ import (
 	"gitlab.com/steph-ano/ledgerly/services/ledger/internal/domain"
 	"gitlab.com/steph-ano/ledgerly/services/ledger/internal/service"
 	"gitlab.com/steph-ano/ledgerly/services/ledger/internal/storage/postgres"
+	"gitlab.com/steph-ano/ledgerly/services/ledger/migrations"
 )
 
 var (
@@ -63,7 +64,7 @@ func TestMain(m *testing.M) {
 			_ = os.RemoveAll(tempDataDir)
 			os.Exit(1)
 		}
-		connStr = fmt.Sprintf("postgres://ledgerly_test:ledgerly_test_pw@localhost:%d/ledgerly_test_db?sslmode=disable", port)
+		connStr = fmt.Sprintf("postgres://ledgerly_test:ledgerly_test_pw@127.0.0.1:%d/ledgerly_test_db?sslmode=disable", port)
 	}
 
 	var err error
@@ -80,22 +81,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	candidates := []string{
-		filepath.Join("..", "..", "migrations", "000001_init_ledger_schema.up.sql"),
-		filepath.Join("..", "..", "..", "migrations", "000001_init_ledger_schema.up.sql"),
-		filepath.Join("migrations", "000001_init_ledger_schema.up.sql"),
-	}
-	for _, c := range candidates {
-		if b, err := os.ReadFile(c); err == nil {
-			migrationSQL = string(b)
-			break
-		}
-	}
-	if migrationSQL == "" {
-		fmt.Println("failed to find migration file 000001_init_ledger_schema.up.sql")
-		cleanup()
-		os.Exit(1)
-	}
+	migrationSQL = migrations.UpSQL
 
 	code := m.Run()
 
@@ -135,7 +121,7 @@ func setupTestServer(t *testing.T) (*apihttp.Server, func()) {
 		origConnStr = os.Getenv("DATABASE_URL")
 	}
 	if origConnStr == "" {
-		origConnStr = "postgres://ledgerly_test:ledgerly_test_pw@localhost:54344/ledgerly_test_db?sslmode=disable"
+		origConnStr = "postgres://ledgerly_test:ledgerly_test_pw@127.0.0.1:54344/ledgerly_test_db?sslmode=disable"
 	}
 
 	sep := "?"

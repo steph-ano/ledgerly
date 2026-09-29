@@ -65,7 +65,7 @@ func TestMain(m *testing.M) {
 			_ = os.RemoveAll(tempDataDir)
 			os.Exit(1)
 		}
-		connStr = fmt.Sprintf("postgres://ledgerly_test:ledgerly_test_pw@localhost:%d/ledgerly_test_db?sslmode=disable", port)
+		connStr = fmt.Sprintf("postgres://ledgerly_test:ledgerly_test_pw@127.0.0.1:%d/ledgerly_test_db?sslmode=disable", port)
 	}
 
 	var err error
@@ -107,18 +107,36 @@ func setupHTTPServer(t *testing.T) (*apihttp.Server, *sql.DB, func()) {
 	_, err := sharedDB.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s;", schemaName))
 	require.NoError(t, err)
 
-	_, err = sharedDB.ExecContext(ctx, fmt.Sprintf("SET search_path TO %s, public;", schemaName))
+	prepSQL := fmt.Sprintf("SET search_path TO %s, public;\n%s", schemaName, migrations.UpSQL)
+	err = postgres.ExecuteMigrationScript(ctx, sharedDB, prepSQL)
 	require.NoError(t, err)
 
-	cleanMigration := migrations.UpSQL
-	cleanMigration = strings.ReplaceAll(cleanMigration, "public.update_updated_at_column", fmt.Sprintf("%s.update_updated_at_column", schemaName))
+	origConnStr := os.Getenv("TEST_DATABASE_URL")
+	if origConnStr == "" {
+		origConnStr = os.Getenv("DATABASE_URL")
+	}
+	if origConnStr == "" {
+		origConnStr = "postgres://ledgerly_test:ledgerly_test_pw@127.0.0.1:54344/ledgerly_test_db?sslmode=disable"
+	}
 
-	_, err = sharedDB.ExecContext(ctx, cleanMigration)
+	sep := "?"
+	if strings.Contains(origConnStr, "?") {
+		sep = "&"
+	}
+	schemaConnStr := fmt.Sprintf("%s%ssearch_path=%s,public", origConnStr, sep, schemaName)
+
+	testDB, err := postgres.Open(postgres.Config{
+		URL:             schemaConnStr,
+		MaxOpenConns:    20,
+		MaxIdleConns:    20,
+		ConnMaxLifetime: 2 * time.Minute,
+		ConnMaxIdleTime: 1 * time.Minute,
+	})
 	require.NoError(t, err)
 
-	orderRepo := postgres.NewOrderRepository(sharedDB)
-	attemptRepo := postgres.NewPaymentAttemptRepository(sharedDB)
-	outboxRepo := postgres.NewOutboxRepository(sharedDB)
+	orderRepo := postgres.NewOrderRepository(testDB)
+	attemptRepo := postgres.NewPaymentAttemptRepository(testDB)
+	outboxRepo := postgres.NewOutboxRepository(testDB)
 	gw := gateway.NewSimulator()
 
 	// Mock ledger server
@@ -143,16 +161,17 @@ func setupHTTPServer(t *testing.T) (*apihttp.Server, *sql.DB, func()) {
 		500, // 5%
 	)
 
-	server := apihttp.NewServer(svc, sharedDB)
+	server := apihttp.NewServer(svc, testDB)
 
 	teardown := func() {
 		mockLedger.Close()
+		_ = testDB.Close()
 		tdCtx, tdCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer tdCancel()
 		_, _ = sharedDB.ExecContext(tdCtx, fmt.Sprintf("DROP SCHEMA %s CASCADE;", schemaName))
 	}
 
-	return server, sharedDB, teardown
+	return server, testDB, teardown
 }
 
 func TestServer_HealthzAndReadyz(t *testing.T) {
