@@ -13,6 +13,8 @@ dist/
 coverage.html
 coverage.txt
 .coverage/
+**/testdata/rapid/
+testdata/rapid/
 
 # Go build & cache
 .cache/
