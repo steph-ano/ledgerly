@@ -1,0 +1,35 @@
+# Binaries
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts & coverage
+*.out
+*.test
+coverage.html
+coverage.txt
+.coverage/
+
+# Go build & cache
+.cache/
+
+# Environment files
+.env
+.env.local
+*.local
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Docker data volumes
+.docker-data/
+postgres_data/
