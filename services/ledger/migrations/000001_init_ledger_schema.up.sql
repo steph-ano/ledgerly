@@ -1,6 +1,3 @@
--- Enable UUID extension if not present
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-
 -- ============================================================================
 -- 1. ACCOUNTS TABLE
 -- ============================================================================
