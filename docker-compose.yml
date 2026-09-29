@@ -38,5 +38,31 @@ services:
       timeout: 3s
       retries: 3
 
+  bnpl:
+    build:
+      context: ./services/bnpl
+      dockerfile: Dockerfile
+    container_name: ledgerly-bnpl-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ledger:
+        condition: service_healthy
+    environment:
+      PORT: "8081"
+      DATABASE_URL: "postgres://ledgerly:ledgerly_secret@postgres:5432/ledgerly_dev?sslmode=disable"
+      LEDGER_SERVICE_URL: "http://ledger:8080"
+      ENABLE_SCHEDULER: "true"
+      ENABLE_WEBHOOK_DISPATCHER: "true"
+      WEBHOOK_SECRET: "ledgerly_whsec_dev_secret"
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
 volumes:
   postgres_data:

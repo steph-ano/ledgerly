@@ -14,23 +14,36 @@ The platform splits purchases into installments, records every monetary movement
 
 ```mermaid
 graph TD
-    Client["Client / API Consumer"] -->|HTTP / JSON<br/>Idempotency-Key| HTTP["HTTP API Layer (net/http)"]
-    HTTP --> Middleware["Middlewares<br/>(RequestID, Logger, Recovery)"]
-    Middleware --> Service["Ledger Application Service"]
-    Service -->|Canonical Hash| Hasher["Canonical JSON SHA-256 Hasher"]
-    Service --> Domain["Domain Layer<br/>(Money Overflow Checks, Entities, Policies)"]
-    Service --> Storage["PostgreSQL Storage Repository"]
+    Client["Merchant Web / Mobile App"] -->|HTTP / JSON<br/>Orders & Payments| BNPL_API["BNPL Service API (:8081)"]
     
-    subgraph PostgreSQL ["PostgreSQL Database (READ COMMITTED)"]
-        Tx["1. INSERT INTO transactions<br/>ON CONFLICT DO NOTHING"]
-        Locks["2. Deterministic Row Locks<br/>SELECT ... FOR UPDATE (id ASC)"]
-        Policy["3. Verify Projected Balances"]
-        Entries["4. INSERT INTO entries"]
-        Triggers["5. Deferred Triggers on COMMIT<br/>- Sum Debits = Sum Credits<br/>- Single Currency<br/>- Min 2 Entries<br/>- Immutability Blockers"]
-        Tx --> Locks --> Policy --> Entries --> Triggers
+    subgraph BNPL_Service ["BNPL Core Service"]
+        BNPL_API --> OrderSvc["Order & Installment Service"]
+        OrderSvc --> Splitter["Installment Division (4 Bi-Weekly)"]
+        OrderSvc --> GwSim["In-House Gateway Simulator"]
+        OrderSvc --> LedgerClient["Ledger HTTP Client"]
+        
+        Scheduler["Background Scheduler Worker<br/>(SELECT ... FOR UPDATE SKIP LOCKED)"]
+        Scheduler -->|Exponential Backoff (+2h, +12h, +24h)| GwSim
+        Scheduler -->|Post Installment Settlement| LedgerClient
+        
+        OutboxDispatcher["Transactional Outbox Dispatcher<br/>(HMAC-SHA256 Signature)"]
+        OutboxDispatcher -->|Signed Webhooks| MerchantWebhook["Merchant Webhook URL"]
     end
     
-    Storage --> PostgreSQL
+    LedgerClient -->|Double-Entry Transactions| Ledger_API["Ledger Core Service (:8080)"]
+    
+    subgraph Ledger_Service ["Core Ledger Service"]
+        Ledger_API --> LedgerSvc["Ledger Application Service"]
+        LedgerSvc --> Domain["Domain Layer (Overflow Checks)"]
+        LedgerSvc --> Storage["PostgreSQL Storage Repository"]
+    end
+    
+    subgraph PostgreSQL ["PostgreSQL Database (READ COMMITTED)"]
+        Storage --> PgLedger["Ledger Schema<br/>- transactions & entries<br/>- Append-Only Triggers<br/>- Deferred Balance Verification"]
+        OrderSvc --> PgBNPL["BNPL Schema<br/>- orders & installments<br/>- payment_attempts<br/>- outbox_events"]
+        Scheduler --> PgBNPL
+        OutboxDispatcher --> PgBNPL
+    end
 ```
 
 ---
@@ -41,6 +54,7 @@ graph TD
 * All monetary amounts are represented as strict 64-bit signed integers (`int64`) in the minor unit of the currency (e.g., cents for USD: `$10.50` = `1050`).
 * Floating-point numbers (`float32`, `float64`) are **strictly prohibited** across domain models, storage schemas, and API payloads.
 * All monetary calculations implement **overflow-checked arithmetic** (`Add`, `Sub`, `Mul`) protecting against `math.MaxInt64` and `math.MinInt64` boundary exploits.
+* BNPL installment division guarantees that the sum of 4 bi-weekly installments equals the total purchase amount down to the single cent, with non-divisible remainders assigned to the initial down payment (Cuota 1).
 
 ### 2. Double-Entry Zero-Sum Invariant
 Every transaction consists of at least two `Entry` records satisfying:
@@ -67,10 +81,17 @@ All entries within a single transaction must share the same ISO 4217 currency co
   - **Payload Mismatch**: Same key with different payload/amounts returns `409 Conflict`.
   - **Concurrent Requests**: Interlocking unique index locks cause the second request to wait safely for the first to commit or rollback.
 
-### 6. Defense-in-Depth Database Constraints
-In addition to application domain validation, PostgreSQL enforces invariants at `COMMIT` time via deferred constraint triggers (`DEFERRABLE INITIALLY DEFERRED`):
-- `trg_verify_entries_balance_and_currency`: Verifies $\sum \text{debits} = \sum \text{credits}$ and single currency.
-- `trg_verify_transaction_min_entries`: Verifies `COUNT(entries) >= 2`.
+### 6. Installment Scheduler with Worker Leasing & Exponential Backoff
+* Background workers lease due installments using `SELECT ... FOR UPDATE SKIP LOCKED`, preventing multiple worker instances from double-charging the same installment.
+* Automated retry policy for declined attempts follows an exponential backoff schedule:
+  - Attempt 1 fails $\to$ Retry in **+2 hours** (status: `retrying`)
+  - Attempt 2 fails $\to$ Retry in **+12 hours** (status: `retrying`)
+  - Attempt 3 fails $\to$ Retry in **+24 hours** (status: `retrying`)
+  - Attempt 4 fails $\to$ Terminal default: installment marked `failed`, order transitioned to `defaulted`.
+
+### 7. Transactional Outbox for Signed Webhooks
+* All domain events (`order.created`, `order.completed`, `installment.paid`, `order.defaulted`) are written to an `outbox_events` table inside the same ACID database transaction that updates business state.
+* The outbox dispatcher asynchronously sends HTTP POST requests to merchant webhook endpoints with HMAC-SHA256 signatures (`X-Ledgerly-Signature`) for tamper-proof delivery.
 
 ---
 
@@ -83,6 +104,9 @@ All foundational architectural decisions are documented in [`docs/adr/`](docs/ad
 | [ADR-0001](docs/adr/0001-double-entry-invariants-and-money-representation.md) | Double-Entry Invariants, Money Representation, and Immutability | Accepted |
 | [ADR-0002](docs/adr/0002-concurrency-control-and-isolation-strategy.md) | Concurrency Control, Isolation Strategy, and Race Validation | Accepted |
 | [ADR-0003](docs/adr/0003-idempotency-pattern-and-concurrent-requests.md) | Idempotency Pattern, Atomic SQL Transactions, and Concurrent Retries | Accepted |
+| [ADR-0004](docs/adr/0004-build-vs-buy-in-house-payment-gateway-simulator.md) | In-House Deterministic Payment Gateway Simulator | Accepted |
+| [ADR-0005](docs/adr/0005-installment-scheduler-worker-leasing-and-backoff.md) | Installment Scheduler, Concurrency-Safe Leasing, and Exponential Backoff | Accepted |
+| [ADR-0006](docs/adr/0006-transactional-outbox-pattern-for-webhooks.md) | Transactional Outbox Pattern for Asynchronous Webhook Delivery | Accepted |
 
 ---
 
@@ -90,20 +114,21 @@ All foundational architectural decisions are documented in [`docs/adr/`](docs/ad
 
 ### Prerequisites
 * [Docker](https://www.docker.com/) & Docker Compose
-* [Go 1.22+](https://golang.org) (optional, if running locally without Docker)
+* [Go 1.24+](https://golang.org) (optional, if running locally without Docker)
 
 ### Running with Docker Compose
 ```bash
 docker compose up -d --build
 ```
 This spins up:
-- PostgreSQL 16 on port `5432` with health checks.
-- Ledgerly Ledger API on port `8080` (auto-applying database migrations on startup).
+- **PostgreSQL 16** on port `5432` with health checks.
+- **Ledger Core API** on port `8080` (auto-applying ledger database migrations).
+- **BNPL API & Scheduler** on port `8081` (auto-applying BNPL database migrations).
 
 Check service health:
 ```bash
 curl http://localhost:8080/healthz
-curl http://localhost:8080/readyz
+curl http://localhost:8081/healthz
 ```
 
 ---
@@ -204,3 +229,59 @@ curl -X POST http://localhost:8080/v1/transactions/{transaction_id}/reverse \
 ```bash
 curl "http://localhost:8080/v1/accounts/{account_id}/entries?limit=20&offset=0"
 ```
+
+---
+
+## 🛍️ BNPL Service API Reference (Port 8081)
+
+### 1. Create a BNPL Order (Pay-in-4)
+Automatically breaks the order into 4 bi-weekly installments and charges Cuota 1 (down payment) synchronously:
+```bash
+curl -X POST http://localhost:8081/v1/orders \
+  -H "Content-Type: application/json" \
+  -H "X-Client-ID: my_ecommerce_store" \
+  -d '{
+    "customer_account_id": "CUSTOMER_ACCOUNT_UUID",
+    "merchant_account_id": "MERCHANT_ACCOUNT_UUID",
+    "total_amount": 10000,
+    "currency": "USD",
+    "payment_method_token": "pm_card_visa",
+    "merchant_webhook_url": "https://store.example.com/webhooks/ledgerly"
+  }'
+```
+
+### 2. Query Order & Installments Schedule
+```bash
+curl http://localhost:8081/v1/orders/{order_id}
+```
+
+### 3. Pay an Installment Manually
+```bash
+curl -X POST http://localhost:8081/v1/installments/{installment_id}/pay \
+  -H "Content-Type: application/json" \
+  -d '{
+    "payment_method_token": "pm_card_mastercard"
+  }'
+```
+
+### 4. Deterministic Payment Gateway Simulator Tokens
+The built-in simulator recognizes synthetic test cards without requiring external sandbox credentials:
+| Token | Behavior | Simulated Latency |
+| :--- | :--- | :--- |
+| `pm_card_visa` | **Success** (returns transaction reference) | 100ms |
+| `pm_card_mastercard` | **Success** | 100ms |
+| `pm_card_declined` | **Declined**: General card decline | 100ms |
+| `pm_card_insufficient_funds` | **Declined**: Insufficient customer credit | 100ms |
+| `pm_card_expired` | **Declined**: Card expired | 100ms |
+| `pm_card_timeout` | **Transient Timeout**: Simulates gateway network drop | 300ms |
+| `pm_card_rate_limited` | **Rate Limited**: HTTP 429 backoff simulator | 50ms |
+
+### 5. Webhook Signature Verification
+All webhooks delivered to `merchant_webhook_url` include the signature header:
+```
+X-Ledgerly-Signature: sha256=<HMAC-SHA256 hex digest>
+X-Ledgerly-Event-Type: order.created | installment.paid | order.completed | order.defaulted
+X-Ledgerly-Timestamp: 2026-09-29T03:00:00Z
+```
+Merchants verify using `HMAC_SHA256(payload_body, webhook_secret)`.
+

@@ -1,26 +1,25 @@
-.PHONY: test test-unit test-property test-integration build run docker-up docker-down
+.PHONY: test test-ledger test-bnpl build build-ledger build-bnpl docker-up docker-down
 
-test: test-unit test-property test-integration
+test: test-ledger test-bnpl
 
-test-unit:
-	@echo "==> Running domain unit tests..."
-	cd services/ledger && go test -v ./internal/domain/...
+test-ledger:
+	@echo "==> Running Ledger tests (unit, property, integration)..."
+	cd services/ledger && go test -v -timeout 180s ./...
 
-test-property:
-	@echo "==> Running property-based tests..."
-	cd services/ledger && go test -v -run "TestProperty_" ./internal/domain/...
+test-bnpl:
+	@echo "==> Running BNPL tests (unit, property, integration, e2e)..."
+	cd services/bnpl && go test -v -timeout 180s ./...
 
-test-integration:
-	@echo "==> Running PostgreSQL and HTTP integration tests..."
-	cd services/ledger && go test -v -timeout 180s ./internal/storage/postgres/... ./internal/api/http/...
+build: build-ledger build-bnpl
 
-build:
-	@echo "==> Compiling ledger service..."
+build-ledger:
+	@echo "==> Compiling Ledger service..."
 	cd services/ledger && go build -o bin/ledger ./cmd/api/main.go
 
-run:
-	@echo "==> Running ledger service locally..."
-	cd services/ledger && go run ./cmd/api/main.go
+build-bnpl:
+	@echo "==> Compiling BNPL service (api and worker)..."
+	cd services/bnpl && go build -o bin/bnpl-api ./cmd/api/main.go
+	cd services/bnpl && go build -o bin/bnpl-worker ./cmd/worker/main.go
 
 docker-up:
 	@echo "==> Starting containers..."
