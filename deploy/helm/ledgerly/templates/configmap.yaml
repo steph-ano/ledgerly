@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ledgerly.name" . }}-config
+  labels:
+    {{- include "ledgerly.labels" . | nindent 4 }}
+data:
+  LEDGER_PORT: "{{ .Values.ledger.port }}"
+  BNPL_PORT: "{{ .Values.bnplApi.port }}"
+  LEDGER_SERVICE_URL: "http://{{ include "ledgerly.name" . }}-ledger:{{ .Values.ledger.port }}"
+  MERCHANT_FEE_BPS: "500"
+  ENABLE_SCHEDULER: "true"
+  ENABLE_WEBHOOK_DISPATCHER: "true"

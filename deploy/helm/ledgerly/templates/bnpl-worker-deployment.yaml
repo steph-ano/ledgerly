@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ledgerly.name" . }}-bnpl-worker
+  labels:
+    {{- include "ledgerly.labels" . | nindent 4 }}
+    app: bnpl-worker
+spec:
+  replicas: {{ .Values.bnplWorker.replicaCount }}
+  selector:
+    matchLabels:
+      app: bnpl-worker
+  template:
+    metadata:
+      labels:
+        app: bnpl-worker
+    spec:
+      containers:
+        - name: bnpl-worker
+          image: "{{ .Values.bnplWorker.image.repository }}:{{ .Values.bnplWorker.image.tag }}"
+          imagePullPolicy: {{ .Values.bnplWorker.image.pullPolicy }}
+          command: {{ .Values.bnplWorker.command | toJson }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ledgerly.name" . }}-secrets
+                  key: DATABASE_URL
+            - name: LEDGER_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ledgerly.name" . }}-config
+                  key: LEDGER_SERVICE_URL
+            - name: WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ledgerly.name" . }}-secrets
+                  key: WEBHOOK_SECRET
+          resources:
+            {{- toYaml .Values.bnplWorker.resources | nindent 12 }}

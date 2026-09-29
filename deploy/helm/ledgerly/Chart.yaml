@@ -1,0 +1,9 @@
+apiVersion: v2
+name: ledgerly
+description: Helm chart for Ledgerly - Immutable Double-Entry Ledger and BNPL Microservices
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: Stephano
+    email: dev@ledgerly.internal

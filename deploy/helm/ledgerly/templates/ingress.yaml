@@ -1,0 +1,27 @@
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "ledgerly.name" . }}-ingress
+  labels:
+    {{- include "ledgerly.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "ledgerly.name" $ }}-{{ .service }}
+                port:
+                  number: {{ if eq .service "ledger" }}{{ $.Values.ledger.port }}{{ else if eq .service "bnpl-api" }}{{ $.Values.bnplApi.port }}{{ else }}80{{ end }}
+          {{- end }}
+    {{- end }}
+{{- end }}

@@ -107,6 +107,9 @@ All foundational architectural decisions are documented in [`docs/adr/`](docs/ad
 | [ADR-0004](docs/adr/0004-build-vs-buy-in-house-payment-gateway-simulator.md) | In-House Deterministic Payment Gateway Simulator | Accepted |
 | [ADR-0005](docs/adr/0005-installment-scheduler-worker-leasing-and-backoff.md) | Installment Scheduler, Concurrency-Safe Leasing, and Exponential Backoff | Accepted |
 | [ADR-0006](docs/adr/0006-transactional-outbox-pattern-for-webhooks.md) | Transactional Outbox Pattern for Asynchronous Webhook Delivery | Accepted |
+| [ADR-0007](docs/adr/0007-web-dashboard-architecture-and-state-management.md) | Web Dashboard Architecture, State Management, and Design System | Accepted |
+| [ADR-0008](docs/adr/0008-mobile-application-architecture.md) | Mobile Application Architecture and Payment Flow | Accepted |
+| [ADR-0009](docs/adr/0009-cloud-infrastructure-and-ci-cd-pipeline.md) | Cloud Infrastructure, Kubernetes Deployment, and Multi-Stage CI/CD | Accepted |
 
 ---
 
@@ -285,3 +288,103 @@ X-Ledgerly-Timestamp: 2026-09-29T03:00:00Z
 ```
 Merchants verify using `HMAC_SHA256(payload_body, webhook_secret)`.
 
+---
+
+## 💻 Web Dashboard (Port 3000)
+
+Ledgerly provides an interactive, dark-mode fintech operator and merchant web application built with **React 19**, **TypeScript**, and **Vite** (located in [`web/`](web/)):
+
+1. **Pay-in-4 Checkout Simulator**:
+   - Live cent calculations with remainder allocation to Cuota 1.
+   - Test card selection (`pm_card_visa`, `pm_card_insufficient_funds`, `pm_card_timeout`, etc.).
+   - Instant order creation with synchronous Cuota 1 payment.
+2. **Merchant & Operator Console**:
+   - Real-time orders pipeline with installment timeline visualizer.
+   - Installment settlement status: `paid`, `pending`, `retrying`, or `failed`.
+   - Manual early repayment modal with test payment method selection.
+3. **Double-Entry Ledger Visualizer**:
+   - Accounts monitor with live balances (`customer`, `merchant`, `platform`, `fees`).
+   - $\sum \text{Debits} = \sum \text{Credits}$ real-time invariant badge.
+   - One-click immutable transaction reversal (refund).
+4. **Transactional Outbox Inspector**:
+   - Live feed of webhook events (`order.created`, `installment.paid`, etc.).
+   - HMAC-SHA256 signature inspector for webhook verification debugging.
+5. **Fintech Architecture Modal**:
+   - Interactive breakdown of the 6 fundamental invariants for technical interview demonstrations.
+
+To run the web application locally:
+```bash
+cd web
+npm install
+npm run dev
+# Accessible at http://localhost:3000
+```
+
+---
+
+## 📱 Mobile Customer Application (Expo / React Native)
+
+The customer-facing mobile application is located in [`mobile/`](mobile/) and built with **React Native** and **Expo**:
+
+- **Home Screen**: Active credit overview, next due installment reminder, and recent purchases with installment progress bars.
+- **Installment Payment Sheet**: Modal to pay installments on demand with simulated payment methods.
+- **Account Statement Screen**: Real-time view of customer debits and credits directly sourced from the double-entry ledger.
+
+To run the mobile app:
+```bash
+cd mobile
+npm install
+npm start
+```
+Typecheck validation:
+```bash
+make test-mobile
+```
+
+---
+
+## ☁️ Cloud Infrastructure & Kubernetes (IaC)
+
+### 1. Multi-Stage CI/CD Pipeline
+Configured in [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+- **Core Ledger CI**: Go test with `-race` detection against real PostgreSQL service container.
+- **BNPL Service CI**: Unit, rapid property-based tests, and integration tests.
+- **Frontend CI**: React 19 production build and TypeScript verification.
+- **Mobile CI**: Expo / React Native strict TypeScript typecheck.
+- **Container Build CI**: Multi-stage Docker image builds with caching.
+
+### 2. AWS Production Topology (Terraform)
+Located in [`infra/terraform/`](infra/terraform/):
+- **VPC**: Multi-AZ topology with isolated public, private, and database subnets across 3 Availability Zones.
+- **RDS PostgreSQL 16**: Multi-AZ automated failover with AWS KMS encryption at rest, custom parameter groups (`shared_preload_libraries`, connection pooling limits), and private subnet isolation.
+- **Amazon EKS**: Managed Kubernetes cluster with managed node groups, IMDSv2 security, private endpoint access, and AWS Load Balancer Controller integration.
+
+### 3. Kubernetes Manifests (Helm Chart)
+Located in [`deploy/helm/ledgerly/`](deploy/helm/ledgerly/):
+- Deployments for `ledger`, `bnpl-api`, `bnpl-worker`, and `web`.
+- `HorizontalPodAutoscaler` (HPA) targeting 70% CPU and 80% memory utilization.
+- `PodDisruptionBudget` (PDB) guaranteeing minimum availability during cluster upgrades.
+- Ingress with TLS termination and path routing (`/`, `/api/ledger/`, `/api/bnpl/`).
+
+---
+
+## 🎯 Fintech Interview Guide (Technical Defense)
+
+When defending Ledgerly in a fintech engineering interview (e.g., Sezzle, Stripe, Affirm), focus on these design choices:
+
+| Concept | The Problem | How Ledgerly Solves It |
+| :--- | :--- | :--- |
+| **Float Rounding Drift** | `0.1 + 0.2 = 0.30000000000000004` causes penny leaks across millions of transactions. | Strict 64-bit integer arithmetic in minor currency units (cents). Floating-point types are banned. |
+| **Installment Division Remainder** | `$100.00 / 3 = $33.333...` or `$10.01 / 4` leaves indivisible cents. | Integer division + modulo assignment: remainder is added strictly to Cuota 1 (down payment), guaranteeing zero-sum balance. |
+| **Deadlocks under Concurrency** | Two concurrent transactions locking Account A and Account B in different order cause SQL deadlocks. | Accounts are sorted lexicographically (`account_id ASC`) prior to taking `SELECT ... FOR UPDATE` row locks. |
+| **Double-Spending Retries** | Network timeouts cause merchants to re-submit payment requests, causing duplicate charges. | Atomic Idempotency Key stored in the same SQL transaction with canonical SHA-256 payload verification. |
+| **Data Tampering & Auditing** | Accidental `UPDATE` or `DELETE` on financial records ruins accounting integrity. | PostgreSQL triggers block any `UPDATE` or `DELETE` on `transactions` and `entries`. Corrections require reversal entries. |
+| **Unbalanced Ledgers** | Bug in application code inserts unequal debits and credits. | Deferred SQL constraint trigger (`sum(debits) = sum(credits)`) executes at `COMMIT` time, aborting unbalanced transactions. |
+| **Scheduler Concurrency** | Multiple background scheduler instances processing the same due installment concurrently. | `SELECT ... FOR UPDATE SKIP LOCKED` allows workers to grab distinct batches without contention or duplicate runs. |
+| **Dual-Write Distributed Failure** | Updating database and calling an external webhook/gateway leaves system inconsistent if one fails. | Transactional Outbox Pattern: webhook events are written to the database atomically with the business state. |
+
+---
+
+## 📜 License
+
+MIT License. Designed and crafted for high-performance fintech engineering portfolios.

@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ledgerly.name" . }}-bnpl-api
+  labels:
+    {{- include "ledgerly.labels" . | nindent 4 }}
+    app: bnpl-api
+spec:
+  replicas: {{ .Values.bnplApi.replicaCount }}
+  selector:
+    matchLabels:
+      app: bnpl-api
+  template:
+    metadata:
+      labels:
+        app: bnpl-api
+    spec:
+      containers:
+        - name: bnpl-api
+          image: "{{ .Values.bnplApi.image.repository }}:{{ .Values.bnplApi.image.tag }}"
+          imagePullPolicy: {{ .Values.bnplApi.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.bnplApi.port }}
+              name: http
+          env:
+            - name: PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ledgerly.name" . }}-config
+                  key: BNPL_PORT
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ledgerly.name" . }}-secrets
+                  key: DATABASE_URL
+            - name: LEDGER_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "ledgerly.name" . }}-config
+                  key: LEDGER_SERVICE_URL
+            - name: WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ledgerly.name" . }}-secrets
+                  key: WEBHOOK_SECRET
+          resources:
+            {{- toYaml .Values.bnplApi.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ledgerly.name" . }}-bnpl-api
+  labels:
+    {{- include "ledgerly.labels" . | nindent 4 }}
+    app: bnpl-api
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.bnplApi.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: bnpl-api

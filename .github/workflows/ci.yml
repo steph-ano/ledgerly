@@ -1,0 +1,182 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-ledger:
+    name: Ledger Service Tests (-race & Invariants)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ledgerly_test
+          POSTGRES_PASSWORD: ledgerly_test_pw
+          POSTGRES_DB: ledgerly_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: services/ledger/go.sum
+
+      - name: Run Ledger Unit & Property Tests with Race Detector
+        working-directory: services/ledger
+        run: |
+          go test -v -race -timeout 60s ./internal/domain/...
+
+      - name: Run Ledger PostgreSQL & HTTP Integration Tests
+        working-directory: services/ledger
+        env:
+          TEST_DATABASE_URL: postgres://ledgerly_test:ledgerly_test_pw@localhost:5432/ledgerly_test_db?sslmode=disable
+        run: |
+          go test -v -race -timeout 180s ./internal/storage/postgres/... ./internal/api/http/...
+
+      - name: Compile Ledger Binary
+        working-directory: services/ledger
+        run: |
+          CGO_ENABLED=0 go build -ldflags="-w -s" -o bin/ledger ./cmd/api/main.go
+
+  test-bnpl:
+    name: BNPL Service Tests (Scheduler, Simulator & E2E)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ledgerly_test
+          POSTGRES_PASSWORD: ledgerly_test_pw
+          POSTGRES_DB: ledgerly_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: services/bnpl/go.sum
+
+      - name: Run BNPL Domain & Gateway Tests with Race Detector
+        working-directory: services/bnpl
+        run: |
+          go test -v -race -timeout 60s ./internal/domain/... ./internal/gateway/...
+
+      - name: Run BNPL Postgres, Scheduler & HTTP E2E Tests
+        working-directory: services/bnpl
+        env:
+          TEST_DATABASE_URL: postgres://ledgerly_test:ledgerly_test_pw@localhost:5432/ledgerly_test_db?sslmode=disable
+        run: |
+          go test -v -race -timeout 180s ./internal/storage/postgres/... ./internal/api/http/...
+
+      - name: Compile BNPL Binaries (API & Worker)
+        working-directory: services/bnpl
+        run: |
+          CGO_ENABLED=0 go build -ldflags="-w -s" -o bin/bnpl-api ./cmd/api/main.go
+          CGO_ENABLED=0 go build -ldflags="-w -s" -o bin/bnpl-worker ./cmd/worker/main.go
+
+  test-web:
+    name: Web Frontend Build & Types
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build Web Application
+        working-directory: web
+        run: npm run build
+
+  test-mobile:
+    name: Mobile App Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: mobile
+        run: npm ci
+
+      - name: Validate TypeScript Types
+        working-directory: mobile
+        run: npm run typecheck
+
+  docker-build:
+    name: Validate Docker Images
+    needs: [test-ledger, test-bnpl, test-web, test-mobile]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Ledger Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/ledger
+          file: ./services/ledger/Dockerfile
+          push: false
+          tags: ledgerly/ledger:test
+
+      - name: Build BNPL Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/bnpl
+          file: ./services/bnpl/Dockerfile
+          push: false
+          tags: ledgerly/bnpl:test
+
+      - name: Build Web Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: false
+          tags: ledgerly/web:test

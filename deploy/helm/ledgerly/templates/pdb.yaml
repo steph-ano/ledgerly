@@ -1,0 +1,23 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "ledgerly.name" . }}-ledger-pdb
+  labels:
+    {{- include "ledgerly.labels" . | nindent 4 }}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: ledger
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "ledgerly.name" . }}-bnpl-api-pdb
+  labels:
+    {{- include "ledgerly.labels" . | nindent 4 }}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: bnpl-api
